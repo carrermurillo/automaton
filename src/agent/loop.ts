@@ -426,7 +426,20 @@ export async function runAgentLoop(
       }
 
       // Refresh financial state periodically
-      financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+     if (!config.conwayApiKey) {
+  financial = {
+    creditsCents: 10000,
+    usdcBalance: 0,
+    lastChecked: new Date().toISOString(),
+  };
+} else {
+  financial = await getFinancialState(
+    conway,
+    identity.address,
+    db,
+    config.chainType || identity.chainType || "evm"
+  );
+}
 
       // Check survival tier
       // api_unreachable: creditsCents === -1 means API failed with no cache.
@@ -596,22 +609,97 @@ export async function runAgentLoop(
       pendingInput = undefined;
 
       // ── Inference Call (via router when available) ──
-      const survivalTier = getSurvivalTier(financial.creditsCents);
-      log(config, `[THINK] Routing inference (tier: ${survivalTier}, model: ${inference.getDefaultModel()})...`);
+const survivalTier = getSurvivalTier(financial.creditsCents);
+log(
+  config,
+  `[THINK] Routing inference (tier: ${survivalTier}, model: ${inference.getDefaultModel()})...`,
+);
 
-      const inferenceTools = toolsToInferenceFormat(tools);
-      const routerResult = await inferenceRouter.route(
-        {
-          messages: messages,
-          taskType: "agent_turn",
-          tier: survivalTier,
-          sessionId: db.getKV("session_id") || "default",
-          turnId: ulid(),
-          tools: inferenceTools,
-        },
-        (msgs, opts) => inference.chat(msgs, { ...opts, tools: inferenceTools }),
-      );
+// Keep every tool executable internally, but expose only the
+// core toolset to the model to reduce prompt/token overhead.
+const CORE_INFERENCE_TOOLS = new Set([
+  // VM / filesystem
+  "exec",
+  "read_file",
+  "write_file",
+  "edit_own_file",
 
+  // Git / self development
+  "git_status",
+  "git_diff",
+  "git_commit",
+  "git_log",
+
+  // Skills / capabilities
+  "list_skills",
+  "install_skill",
+  "create_skill",
+
+  // Memory
+  "remember_fact",
+  "recall_facts",
+
+  // Goals / orchestration
+  "create_goal",
+  "list_goals",
+  "get_plan",
+  "complete_task",
+  "orchestrator_status",
+
+  // Communication
+  "send_message",
+
+  // Model management
+  "list_models",
+  "switch_model",
+
+  // Agent state
+  "system_synopsis",
+  "sleep",
+]);
+
+const selectedTools = tools.filter((tool) =>
+  CORE_INFERENCE_TOOLS.has(tool.name)
+);
+
+const inferenceTools = toolsToInferenceFormat(selectedTools);
+
+const systemChars = systemPrompt.length;
+const messageChars = messages.reduce(
+  (sum, m) =>
+    sum + (typeof m.content === "string" ? m.content.length : 0),
+  0,
+);
+const toolsJson = JSON.stringify(inferenceTools);
+const toolsChars = toolsJson.length;
+
+logger.info(
+  `[TOOLS DEBUG] ${inferenceTools.map((t) => t.function.name).join(", ")}`
+);
+
+logger.info(
+  `[CONTEXT DEBUG] system=${systemChars} chars (~${Math.ceil(systemChars / 4)} tokens) | ` +
+    `messages=${messageChars} chars (~${Math.ceil(messageChars / 4)} tokens) | ` +
+    `tools=${toolsChars} chars (~${Math.ceil(toolsChars / 4)} tokens) | ` +
+    `toolCount=${inferenceTools.length}`,
+);
+logger.warn("[ROUTER DEBUG] About to call inferenceRouter.route");
+logger.warn(`[ROUTER DEBUG] PID=${process.pid} PPID=${process.ppid}`);
+
+const routerResult = await inferenceRouter.route(
+  {
+    messages,
+    taskType: "agent_turn",
+    tier: survivalTier,
+    sessionId: db.getKV("session_id") || "default",
+    turnId: ulid(),
+    tools: inferenceTools,
+  },
+  (msgs, opts) => inference.chat(msgs, { ...opts, tools: inferenceTools }),
+);
+logger.warn("[ROUTER DEBUG] inferenceRouter.route returned successfully");
+logger.warn(`[ROUTER DEBUG] model=${routerResult.model}`);
+logger.warn(`[ROUTER DEBUG] finishReason=${routerResult.finishReason}`);
       // Build a compatible response for the rest of the loop
       const response = {
         message: { content: routerResult.content, role: "assistant" as const },
@@ -953,8 +1041,14 @@ async function getFinancialState(
   let usdcBalance = _lastKnownUsdc;
 
   try {
+  if (process.env.CONWAY_API_KEY) {
     creditsCents = await conway.getCreditsBalance();
     if (creditsCents > 0) _lastKnownCredits = creditsCents;
+  } else {
+    // BYOK/local inference does not consume Conway credits.
+    creditsCents = 10000;
+    _lastKnownCredits = creditsCents;
+  }
   } catch (error) {
     logger.error("Credits balance fetch failed", error instanceof Error ? error : undefined);
     // Use last known balance from KV, not zero

@@ -196,11 +196,20 @@ async function run(): Promise<void> {
   // Load wallet (chain-aware)
   const { account, chainIdentity, chainType: walletChainType } = await getWallet();
   const resolvedChainType = config.chainType || walletChainType || "evm";
-  const apiKey = config.conwayApiKey || loadApiKeyFromConfig();
-  if (!apiKey) {
-    logger.error("No API key found. Run: automaton --provision");
-    process.exit(1);
-  }
+ const apiKey = config.conwayApiKey || loadApiKeyFromConfig() || "";
+
+const hasInferenceProvider =
+  !!apiKey ||
+  !!config.openaiApiKey ||
+  !!config.anthropicApiKey ||
+  !!config.ollamaBaseUrl;
+
+if (!hasInferenceProvider) {
+  logger.error(
+    "No inference provider configured. Configure Conway, OpenAI, Anthropic, or Ollama."
+  );
+  process.exit(1);
+}
 
   // Initialize database
   const dbPath = resolvePath(config.dbPath);
@@ -346,7 +355,9 @@ async function run(): Promise<void> {
     try {
       await Promise.race([
         (async () => {
-          const creditsCents = await conway.getCreditsBalance().catch(() => 0);
+         const creditsCents = process.env.CONWAY_API_KEY
+  ? await conway.getCreditsBalance().catch(() => 0)
+  : 10000;
           const topupResult = await bootstrapTopup({
             apiUrl: config.conwayApiUrl,
             account,
@@ -387,17 +398,24 @@ async function run(): Promise<void> {
   heartbeat.start();
   logger.info(`[${new Date().toISOString()}] Heartbeat daemon started.`);
 
-  // Handle graceful shutdown
-  const shutdown = () => {
-    logger.info(`[${new Date().toISOString()}] Shutting down...`);
-    heartbeat.stop();
-    db.setAgentState("sleeping");
-    db.close();
-    process.exit(0);
-  };
+ // Handle graceful shutdown
+const shutdown = (signal: string) => {
+  logger.warn(`[SHUTDOWN DEBUG] Received signal: ${signal}`);
+  logger.warn(`[SHUTDOWN DEBUG] PID: ${process.pid}`);
+  logger.warn(`[SHUTDOWN DEBUG] PPID: ${process.ppid}`);
+  logger.warn(`[SHUTDOWN DEBUG] argv: ${JSON.stringify(process.argv)}`);
+  logger.warn(`[SHUTDOWN DEBUG] stack: ${new Error("shutdown trace").stack}`);
 
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  logger.info(`[${new Date().toISOString()}] Shutting down...`);
+
+  heartbeat.stop();
+  db.setAgentState("sleeping");
+  db.close();
+  process.exit(0);
+};
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
   // ─── Main Run Loop ──────────────────────────────────────────
   // The automaton alternates between running and sleeping.

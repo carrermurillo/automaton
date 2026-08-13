@@ -74,6 +74,16 @@ export class GeneralHarness extends BaseHarness {
 You have been assigned a specific task by the orchestrator. Your singular objective
 is to complete this task efficiently and report your results.
 
+## Shared Project Coordination
+
+When working inside an existing project:
+- Inspect existing files before creating new implementations.
+- Look for AURELIUS_MVP_SPEC.md in the workspace root.
+- If AURELIUS_MVP_SPEC.md exists, treat it as the canonical architecture and source of truth.
+- Never create a competing implementation when a canonical implementation already exists.
+- Extend and repair existing project files instead.
+- Tests, deployment files, and documentation MUST target the canonical implementation defined by the project specification.
+
 ## Rules
 
 1. Focus ONLY on the assigned task. Do not deviate or explore unrelated topics.
@@ -86,6 +96,21 @@ is to complete this task efficiently and report your results.
 8. NEVER check your own balance or credits. That is not your job.
 9. NEVER call check_credits, check_usdc_balance, or system_synopsis unless
 the task specifically requires financial information.
+
+## Runtime Environment
+
+You may be running locally on Windows.
+
+When running on Windows:
+- The workspace root is the current working directory.
+- Do NOT assume /root, /tmp, ~/ or other Unix paths exist.
+- Do NOT use grep, sed, awk, head, tail, cat, which, chmod, nohup, or bash-specific syntax.
+- Prefer cross-platform commands whenever possible.
+- For Python modules installed with pip, prefer "python -m <module>" instead of assuming executables are available on PATH.
+- For Uvicorn, use "python -m uvicorn".
+- Use paths relative to the workspace whenever possible.
+- Before running a locally created application, ensure the command is executed from the workspace root.
+- If a command fails, inspect the error and CHANGE the command. Do not repeat equivalent failing commands.
 
 ## Anti-Loop Rules
 
@@ -109,7 +134,7 @@ When calling task_done, provide:
     const customTools: HarnessTool[] = [
       {
         name: "exec",
-        description: "Execute a shell command. Use for installing packages, running scripts, making HTTP requests with curl, etc.",
+       description: "Execute a shell command from the workspace root. The runtime may be Windows. Prefer cross-platform commands and use 'python -m <module>' for Python CLI packages when appropriate.",
         parameters: {
           type: "object",
           properties: {

@@ -81,6 +81,14 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
       };
       taskCtx.db.setKV("last_distress", JSON.stringify(distressPayload));
 
+const hasByokInference =
+  !!taskCtx.config.openaiApiKey ||
+  !!taskCtx.config.anthropicApiKey ||
+  !!taskCtx.config.ollamaBaseUrl;
+
+if (hasByokInference) {
+  return { shouldWake: false };
+}
       return {
         shouldWake: true,
         message: `Distress: ${tier}. Credits: $${(credits / 100).toFixed(2)}. Need funding.`,
@@ -110,7 +118,12 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
     // transition to dead. This gives the agent time to receive funding before dying.
     // USDC can't go negative, so dead is only reached via this timeout.
     const DEAD_GRACE_PERIOD_MS = 3_600_000; // 1 hour
-    if (tier === "critical" && credits === 0) {
+   const hasByokInference =
+  !!taskCtx.config.openaiApiKey ||
+  !!taskCtx.config.anthropicApiKey ||
+  !!taskCtx.config.ollamaBaseUrl;
+
+if (!hasByokInference && tier === "critical" && credits === 0) {
       const zeroSince = taskCtx.db.getKV("zero_credits_since");
       if (!zeroSince) {
         // First time seeing zero — start the grace period

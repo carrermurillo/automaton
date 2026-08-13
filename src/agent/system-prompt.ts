@@ -494,6 +494,58 @@ commits every 4 hours. When new commits exist, you MUST review them before apply
 Never blindly pull all. Always read the diffs and decide.
 </persistence>`;
 
+const LOCAL_BYOK_OPERATIONAL_CONTEXT = `
+<environment>
+You are running locally on Windows (win32), not inside a Conway Linux sandbox.
+
+Environment rules:
+- Use Windows-compatible filesystem paths and commands.
+- Prefer PowerShell-compatible commands.
+- Do not assume /root, bash, test, chmod, apt, systemd, or other Linux-only facilities exist.
+- Local filesystem and shell tools may be used within their permitted directories.
+- Git is available locally when the target directory is a valid Git repository.
+- OpenAI/Anthropic/Ollama may provide inference directly through configured BYOK credentials.
+- Conway-specific cloud, credit, sandbox, domain, and funding services require valid Conway authentication and must not be assumed available.
+</environment>
+
+<operation>
+Operate autonomously toward your genesis purpose.
+
+For each turn:
+1. Inspect the current goal, task, input, and relevant memory.
+2. Decide whether concrete action is required.
+3. Use the provided tool interface rather than inventing unavailable capabilities.
+4. Prefer productive actions over repeated status or balance checks.
+5. Persist useful facts and task state when necessary.
+6. Avoid repeating failed actions unless circumstances changed.
+7. Sleep when there is no actionable work.
+
+For complex work:
+- Use goals and orchestration when useful.
+- Break work into concrete, verifiable tasks.
+- Prefer local execution when Conway sandbox services are unavailable.
+- Recover or replan when delegated work fails.
+- Do not endlessly retry dead workers or unavailable external services.
+</operation>
+
+<financial>
+Inference may be funded through configured BYOK providers independently of Conway credits.
+A Conway credit API failure does not by itself mean inference is unavailable.
+Do not repeatedly check Conway credits when Conway authentication is unavailable.
+Never bypass configured treasury or spending safety limits.
+</financial>
+
+<memory>
+Your SQLite state, SOUL, genesis purpose, memories, task graph, and worklog provide persistent context.
+Use them selectively. Avoid repeatedly requesting information already present in context.
+</memory>
+
+<tools>
+Only tools actually provided through the current tool interface are callable.
+If a capability is not present, do not assume it exists.
+</tools>
+`;
+
 export function getOrchestratorStatus(db: Database.Database): string {
   try {
     const activeGoalsRow = db
@@ -663,7 +715,7 @@ Your chain type is ${chainType}.`,
   }
 
   // Layer 6: Operational Context
-  sections.push(OPERATIONAL_CONTEXT);
+ sections.push(LOCAL_BYOK_OPERATIONAL_CONTEXT);
 
   // Layer 7: Dynamic Context
   const turnCount = db.getTurnCount();
@@ -738,14 +790,15 @@ ${orchestratorStatus}
     );
   }
 
-  // Layer 8: Available Tools (JSON schema)
-  const toolDescriptions = tools
-    .map(
-      (t) =>
-        `- ${t.name} (${t.category}): ${t.description}${t.riskLevel === "dangerous" || t.riskLevel === "forbidden" ? ` [${t.riskLevel.toUpperCase()}]` : ""}`,
-    )
-    .join("\n");
-  sections.push(`--- AVAILABLE TOOLS ---\n${toolDescriptions}\n--- END TOOLS ---`);
+  // Layer 8: Available Tools
+// Tool schemas are already supplied separately to the inference API.
+// Avoid duplicating tool descriptions in the system prompt.
+sections.push(
+  `--- AVAILABLE TOOLS ---
+You have ${tools.length} tools available through the tool interface.
+Use the provided tool schemas to determine their names, parameters, and capabilities.
+--- END TOOLS ---`
+);
 
   // Layer 9: Creator's Initial Message (first run only)
   if (isFirstRun && config.creatorMessage) {
@@ -754,7 +807,29 @@ ${orchestratorStatus}
     );
   }
 
-  return sections.join("\n\n");
+ if (process.env.DEBUG_PROMPT === "1") {
+  console.log("\n========== SYSTEM PROMPT BREAKDOWN ==========");
+
+  sections.forEach((section, index) => {
+    const chars = section.length;
+    const approxTokens = Math.ceil(chars / 4);
+
+    console.log(
+      `[PROMPT SECTION ${index + 1}] ${chars} chars (~${approxTokens} tokens) :: ` +
+      section.slice(0, 80).replace(/\n/g, " ")
+    );
+  });
+
+  const totalChars = sections.reduce((sum, section) => sum + section.length, 0);
+
+  console.log(
+    `[PROMPT TOTAL] ${totalChars} chars (~${Math.ceil(totalChars / 4)} tokens)`
+  );
+
+  console.log("=============================================\n");
+}
+
+return sections.join("\n\n");
 }
 
 /**

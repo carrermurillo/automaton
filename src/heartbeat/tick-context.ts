@@ -47,13 +47,19 @@ export async function buildTickContext(
   const tickId = generateTickId();
   const startedAt = new Date();
 
-  // Fetch balances ONCE
-  let creditBalance = 0;
+// Local/BYOK mode: Conway credits are not required for inference.
+// Use a healthy synthetic balance so survival logic does not kill the agent.
+let creditBalance = 10000;
+
+if (process.env.CONWAY_API_KEY) {
   try {
     creditBalance = await conway.getCreditsBalance();
   } catch (err: any) {
-    logger.error("Failed to fetch credit balance", err instanceof Error ? err : undefined);
+    logger.warn(
+      "Failed to fetch Conway credit balance; continuing in BYOK/local mode",
+    );
   }
+}
 
   let usdcBalance = 0;
   if (walletAddress) {

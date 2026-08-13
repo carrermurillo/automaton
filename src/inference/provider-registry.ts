@@ -456,23 +456,34 @@ export class ProviderRegistry {
     return `missing-${provider.apiKeyEnvVar.toLowerCase()}`;
   }
 
-  private isProviderActive(provider: ProviderConfig): boolean {
-    if (!provider.enabled) {
-      return false;
-    }
-
-    const disabled = this.disablements.get(provider.id);
-    if (!disabled) {
-      return true;
-    }
-
-    if (disabled.disabledUntil <= Date.now()) {
-      this.disablements.delete(provider.id);
-      return true;
-    }
-
+ private isProviderActive(provider: ProviderConfig): boolean {
+  if (!provider.enabled) {
     return false;
   }
+
+  // Local providers do not require a real API key.
+  // Remote providers without their configured API key must be skipped,
+  // otherwise the registry creates a client with "missing-..." and
+  // produces a 401 instead of falling back to the next provider.
+  if (provider.id !== "local") {
+    const apiKey = process.env[provider.apiKeyEnvVar];
+    if (typeof apiKey !== "string" || apiKey.trim().length === 0) {
+      return false;
+    }
+  }
+
+  const disabled = this.disablements.get(provider.id);
+  if (!disabled) {
+    return true;
+  }
+
+  if (disabled.disabledUntil <= Date.now()) {
+    this.disablements.delete(provider.id);
+    return true;
+  }
+
+  return false;
+}
 
   private applySurvivalTier(tier: ModelTier, survivalMode: boolean): ModelTier {
     if (!survivalMode) {

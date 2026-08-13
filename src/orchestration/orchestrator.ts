@@ -528,24 +528,40 @@ export class Orchestrator {
       };
     }
 
-    // Recover stale tasks: workers that died (process restart, sandbox crash)
-    // leave tasks stuck in 'assigned' forever. Detect and reset them.
-    if (this.params.isWorkerAlive) {
-      const assignedTasks = getTasksByGoal(this.params.db, goal.id)
-        .filter((t) => t.status === "assigned" && t.assignedTo);
-      for (const task of assignedTasks) {
-        const alive = this.params.isWorkerAlive(task.assignedTo!);
-        if (!alive) {
-          logger.warn("Recovering stale task from dead worker", {
-            taskId: task.id,
-            worker: task.assignedTo,
-          });
-          this.params.db.prepare(
-            "UPDATE task_graph SET status = 'pending', assigned_to = NULL, started_at = NULL WHERE id = ?",
-          ).run(task.id);
-        }
+   // Recover stale tasks: workers that died (process restart, sandbox crash)
+// leave tasks stuck in 'assigned' forever. Detect and reset them.
+//
+// IMPORTANT: local workers exist only in memory. After a process restart,
+// a local:// child may still be marked as "running" in SQLite even though
+// it no longer exists in the LocalWorkerPool. Mark that stale child as
+// failed before returning its task to pending, otherwise AgentTracker may
+// immediately select the same dead worker again.
+if (this.params.isWorkerAlive) {
+  const assignedTasks = getTasksByGoal(this.params.db, goal.id)
+    .filter((t) => t.status === "assigned" && t.assignedTo);
+
+  for (const task of assignedTasks) {
+    const workerAddress = task.assignedTo!;
+    const alive = this.params.isWorkerAlive(workerAddress);
+
+    if (!alive) {
+      logger.warn("Recovering stale task from dead worker", {
+        taskId: task.id,
+        worker: workerAddress,
+      });
+
+      if (workerAddress.startsWith("local://")) {
+        this.params.db.prepare(
+          "UPDATE children SET status = 'failed' WHERE address = ? AND status IN ('running', 'healthy')",
+        ).run(workerAddress);
       }
+
+      this.params.db.prepare(
+        "UPDATE task_graph SET status = 'pending', assigned_to = NULL, started_at = NULL WHERE id = ?",
+      ).run(task.id);
     }
+  }
+}
 
     const ready = getReadyTasks(this.params.db)
       .filter((task) => task.goalId === goal.id);
@@ -754,16 +770,44 @@ export class Orchestrator {
       };
     }
 
-    this.params.db.prepare(
-      `UPDATE task_graph
-       SET status = 'pending',
-           assigned_to = NULL,
-           started_at = NULL,
-           completed_at = NULL,
-           result = NULL
-       WHERE goal_id = ?
-         AND status IN ('failed', 'blocked')`,
-    ).run(goal.id);
+    // A replan supersedes unfinished tasks from the previous plan.
+//
+// Completed work is preserved.
+//
+// Failed, blocked, and still-pending tasks from the old plan are removed
+// before the replacement plan is decomposed. Keeping them and resetting
+// them to "pending" causes every replan to accumulate another copy of the
+// previous task graph.
+//
+// Assigned/running tasks are intentionally left untouched because they may
+// still have an active worker finishing them.
+const supersededTasks = this.params.db.prepare(
+  `SELECT id
+   FROM task_graph
+   WHERE goal_id = ?
+     AND status IN ('failed', 'blocked', 'pending')`,
+).all(goal.id) as Array<{ id: string }>;
+
+if (supersededTasks.length > 0) {
+  const deleteTask = this.params.db.prepare(
+    `DELETE FROM task_graph WHERE id = ?`,
+  );
+
+  const removeSupersededTasks = this.params.db.transaction(
+    (tasks: Array<{ id: string }>) => {
+      for (const task of tasks) {
+        deleteTask.run(task.id);
+      }
+    },
+  );
+
+  removeSupersededTasks(supersededTasks);
+
+  logger.info("Removed superseded tasks before replan", {
+    goalId: goal.id,
+    removed: supersededTasks.length,
+  });
+}
 
     updateGoalStatus(this.params.db, goal.id, "active");
 
