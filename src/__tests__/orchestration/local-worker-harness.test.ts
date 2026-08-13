@@ -198,6 +198,109 @@ describe("orchestration/LocalWorkerPool harness integration", () => {
     expect(row?.result).toMatchObject({ success: false, output: "failed by harness" });
   });
 
+
+  it("marks the child as stopped when the harness completes successfully", async () => {
+    registry.register("custom-success", SuccessHarness);
+    const pool = createPool();
+
+    const task = insertTask(db, {
+      id: "task-child-success",
+      goalId: "goal-1",
+      agentRole: "custom-success",
+      status: "assigned",
+      assignedTo: "local://worker-child-success",
+      maxRetries: 0,
+    });
+
+    db.prepare(`
+      INSERT INTO children (
+        id,
+        name,
+        address,
+        sandbox_id,
+        genesis_prompt,
+        status,
+        created_at,
+        last_checked
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "child-success",
+      "worker-child-success",
+      "local://worker-child-success",
+      "worker-child-success",
+      "test",
+      "running",
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+
+    await (pool as any).runWorker(
+      "worker-child-success",
+      task,
+      new AbortController().signal,
+    );
+
+    const child = db.prepare(
+      "SELECT status FROM children WHERE address = ?",
+    ).get("local://worker-child-success") as
+      | { status: string }
+      | undefined;
+
+    expect(child?.status).toBe("stopped");
+  });
+
+  it("marks the child as failed when the harness reports failure", async () => {
+    registry.register("custom-failure", FailureHarness);
+    const pool = createPool();
+
+    const task = insertTask(db, {
+      id: "task-child-failure",
+      goalId: "goal-1",
+      agentRole: "custom-failure",
+      status: "assigned",
+      assignedTo: "local://worker-child-failure",
+      maxRetries: 0,
+    });
+
+    db.prepare(`
+      INSERT INTO children (
+        id,
+        name,
+        address,
+        sandbox_id,
+        genesis_prompt,
+        status,
+        created_at,
+        last_checked
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "child-failure",
+      "worker-child-failure",
+      "local://worker-child-failure",
+      "worker-child-failure",
+      "test",
+      "running",
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+
+    await (pool as any).runWorker(
+      "worker-child-failure",
+      task,
+      new AbortController().signal,
+    );
+
+    const child = db.prepare(
+      "SELECT status FROM children WHERE address = ?",
+    ).get("local://worker-child-failure") as
+      | { status: string }
+      | undefined;
+
+    expect(child?.status).toBe("failed");
+  });
+
   it("tracks active workers for spawn/hasWorker/getActiveCount", async () => {
     registry.register("custom-slow", SlowHarness);
     const pool = createPool();
@@ -319,7 +422,14 @@ describe("orchestration/LocalWorkerPool harness integration", () => {
     ).all("goal-1", "task-orchestrator-run") as Array<{ parentId: string; title: string; agentRole: string | null }>;
     expect(delegated.some((entry) => entry.title === "Implement planned subtask" && entry.agentRole === "executor")).toBe(true);
 
-    const planDir = path.join(tempHome, ".automaton", "workspace", "goal-1", "subplans", "task-orchestrator-run");
+    const planDir = path.join(
+  os.homedir(),
+  ".automaton",
+  "workspace",
+  "goal-1",
+  "subplans",
+  "task-orchestrator-run",
+);
     expect(fs.existsSync(path.join(planDir, "plan.json"))).toBe(true);
     expect(fs.existsSync(path.join(planDir, "plan.md"))).toBe(true);
   });
@@ -400,3 +510,5 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 
   }
   throw new Error("Timed out waiting for condition");
 }
+
+

@@ -8,8 +8,14 @@
 import path from "node:path";
 import { ulid } from "ulid";
 import { createLogger } from "../observability/logger.js";
-import type { HarnessContext, WorkerInferenceClient } from "../agent/harness-types.js";
-import { buildWisdomFromGoal, createBudgetFromTask } from "../agent/harness-types.js";
+import type {
+  HarnessContext,
+  WorkerInferenceClient,
+} from "../agent/harness-types.js";
+import {
+  buildWisdomFromGoal,
+  createBudgetFromTask,
+} from "../agent/harness-types.js";
 import { HarnessRegistry } from "../agent/harness-registry.js";
 import { completeTask, failTask } from "./task-graph.js";
 import type { TaskNode } from "./task-graph.js";
@@ -46,7 +52,10 @@ interface LocalWorkerConfig {
 }
 
 export class LocalWorkerPool {
-  private activeWorkers = new Map<string, { promise: Promise<void>; abortController: AbortController }>();
+  private activeWorkers = new Map<
+    string,
+    { promise: Promise<void>; abortController: AbortController }
+  >();
 
   constructor(private readonly config: LocalWorkerConfig) {}
 
@@ -58,10 +67,14 @@ export class LocalWorkerPool {
 
     const workerPromise = this.runWorker(workerId, task, abortController.signal)
       .catch((error) => {
-        logger.error("Local worker crashed", error instanceof Error ? error : new Error(String(error)), {
-          workerId,
-          taskId: task.id,
-        });
+        logger.error(
+          "Local worker crashed",
+          error instanceof Error ? error : new Error(String(error)),
+          {
+            workerId,
+            taskId: task.id,
+          },
+        );
         try {
           failTask(
             this.config.db,
@@ -77,7 +90,10 @@ export class LocalWorkerPool {
         this.activeWorkers.delete(workerId);
       });
 
-    this.activeWorkers.set(workerId, { promise: workerPromise, abortController });
+    this.activeWorkers.set(workerId, {
+      promise: workerPromise,
+      abortController,
+    });
     return { address, name: workerName, sandboxId: workerId };
   }
 
@@ -94,15 +110,50 @@ export class LocalWorkerPool {
     for (const [, worker] of this.activeWorkers) {
       worker.abortController.abort();
     }
-    await Promise.allSettled([...this.activeWorkers.values()].map((worker) => worker.promise));
+    await Promise.allSettled(
+      [...this.activeWorkers.values()].map((worker) => worker.promise),
+    );
     this.activeWorkers.clear();
   }
+  private updateWorkerStatus(
+    workerId: string,
+    status: "stopped" | "failed",
+  ): void {
+    const address = `local://${workerId}`;
 
-  private async runWorker(workerId: string, task: TaskNode, signal: AbortSignal): Promise<void> {
+    try {
+      this.config.db
+        .prepare(
+          `UPDATE children
+       SET status = ?,
+           last_checked = datetime('now')
+       WHERE address = ?`,
+        )
+        .run(status, address);
+    } catch (error) {
+      logger.warn("Failed to update local worker terminal status", {
+        workerId,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async runWorker(
+    workerId: string,
+    task: TaskNode,
+    signal: AbortSignal,
+  ): Promise<void> {
     const harness = this.config.harnessRegistry.createForRole(task.agentRole);
     const workspace = new AgentWorkspace(task.goalId);
-    const allowedEditRoot = path.resolve(this.config.allowedEditRoot ?? DEFAULT_ALLOWED_EDIT_ROOT);
-    const workerIdentity = createWorkerIdentity(this.config.identity, workerId, task.agentRole);
+    const allowedEditRoot = path.resolve(
+      this.config.allowedEditRoot ?? DEFAULT_ALLOWED_EDIT_ROOT,
+    );
+    const workerIdentity = createWorkerIdentity(
+      this.config.identity,
+      workerId,
+      task.agentRole,
+    );
     const context: HarnessContext = {
       workspaceRoot: workspace.basePath,
       allowedEditRoot,
@@ -147,6 +198,8 @@ export class LocalWorkerPool {
 
       if (result.success) {
         completeTask(this.config.db, task.id, result);
+        this.updateWorkerStatus(workerId, "stopped");
+
         logger.info("Local worker completed task", {
           workerId,
           taskId: task.id,
@@ -155,7 +208,14 @@ export class LocalWorkerPool {
           harness: harness.id,
         });
       } else {
-        failTask(this.config.db, task.id, result.output || "Task reported failure", true);
+        failTask(
+          this.config.db,
+          task.id,
+          result.output || "Task reported failure",
+          true,
+        );
+        this.updateWorkerStatus(workerId, "failed");
+
         logger.warn("Local worker reported task failure", {
           workerId,
           taskId: task.id,
@@ -166,8 +226,14 @@ export class LocalWorkerPool {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+
       logger.error(`[WORKER ${workerId}] Harness execution failed: ${message}`);
-      failTask(this.config.db, task.id, message, true);
+
+      try {
+        failTask(this.config.db, task.id, message, true);
+      } finally {
+        this.updateWorkerStatus(workerId, "failed");
+      }
     }
   }
 }

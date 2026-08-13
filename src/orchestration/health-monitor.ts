@@ -1,5 +1,9 @@
 import { createLogger } from "../observability/logger.js";
-import type { AutomatonDatabase, ChildAutomaton, ChildStatus } from "../types.js";
+import type {
+  AutomatonDatabase,
+  ChildAutomaton,
+  ChildStatus,
+} from "../types.js";
 import type { ColonyMessaging } from "./messaging.js";
 import type { AgentTracker, FundingProtocol } from "./types.js";
 
@@ -91,7 +95,9 @@ export class HealthMonitor {
     );
 
     const unhealthyAgents = agents.filter((agent) => !agent.healthy).length;
-    const deadAgents = agents.filter((agent) => isDeadStatus(agent.status)).length;
+    const deadAgents = agents.filter((agent) =>
+      isDeadStatus(agent.status),
+    ).length;
 
     return {
       timestamp: nowIso,
@@ -108,6 +114,17 @@ export class HealthMonitor {
 
     for (const agent of report.agents) {
       if (agent.healthy) {
+        continue;
+      }
+
+      // Terminal workers are historical records, not candidates for auto-healing.
+      // Reviving them creates zombie children in "starting" state.
+      if (
+        agent.status === "failed" ||
+        agent.status === "dead" ||
+        agent.status === "stopped" ||
+        agent.status === "cleaned_up"
+      ) {
         continue;
       }
 
@@ -173,8 +190,8 @@ export class HealthMonitor {
     }
 
     if (
-      errorStats.total >= ERROR_LOOP_MIN_SAMPLES
-      && errorStats.errorRate >= ERROR_LOOP_THRESHOLD
+      errorStats.total >= ERROR_LOOP_MIN_SAMPLES &&
+      errorStats.errorRate >= ERROR_LOOP_THRESHOLD
     ) {
       issues.add("error_loop");
     }
@@ -239,7 +256,9 @@ export class HealthMonitor {
   }
 
   private getErrorStats(address: string): ErrorStats {
-    const windowStart = new Date(Date.now() - ERROR_RATE_WINDOW_MS).toISOString();
+    const windowStart = new Date(
+      Date.now() - ERROR_RATE_WINDOW_MS,
+    ).toISOString();
 
     const recentRows = this.db.raw
       .prepare(
@@ -350,18 +369,17 @@ export class HealthMonitor {
   }
 
   private async restartAgent(agent: AgentHealthStatus): Promise<HealAction> {
-    const reason = "process appears crashed or non-responsive";
-    const success = await this.sendShutdownRequest(agent.address, reason);
+    const reason =
+      "process appears crashed or non-responsive; automatic restart unavailable";
 
-    if (success) {
-      this.agentTracker.updateStatus(agent.address, "starting");
-    }
-
+    // Sending a shutdown_request is NOT a restart.
+    // Do not move the worker back to "starting".
+    // The orchestrator can spawn a replacement worker when work needs execution.
     return {
       type: "restart",
       agentAddress: agent.address,
       reason,
-      success,
+      success: false,
     };
   }
 
@@ -406,17 +424,22 @@ export class HealthMonitor {
     const shouldFail = nextRetry > task.maxRetries;
 
     if (shouldFail) {
-      this.db.raw.prepare(
-        `UPDATE task_graph
+      this.db.raw
+        .prepare(
+          `UPDATE task_graph
          SET status = 'failed',
              completed_at = ?,
              result = ?
          WHERE id = ?`,
-      ).run(
-        new Date().toISOString(),
-        JSON.stringify({ ...resultPayload, reason: "max retries exceeded during reassignment" }),
-        taskId,
-      );
+        )
+        .run(
+          new Date().toISOString(),
+          JSON.stringify({
+            ...resultPayload,
+            reason: "max retries exceeded during reassignment",
+          }),
+          taskId,
+        );
 
       return {
         type: "reassign",
@@ -426,8 +449,9 @@ export class HealthMonitor {
       };
     }
 
-    this.db.raw.prepare(
-      `UPDATE task_graph
+    this.db.raw
+      .prepare(
+        `UPDATE task_graph
        SET status = ?,
            assigned_to = ?,
            started_at = NULL,
@@ -435,13 +459,14 @@ export class HealthMonitor {
            retry_count = ?,
            result = ?
        WHERE id = ?`,
-    ).run(
-      status,
-      replacement?.address ?? null,
-      nextRetry,
-      JSON.stringify(resultPayload),
-      taskId,
-    );
+      )
+      .run(
+        status,
+        replacement?.address ?? null,
+        nextRetry,
+        JSON.stringify(resultPayload),
+        taskId,
+      );
 
     return {
       type: "reassign",
@@ -466,7 +491,10 @@ export class HealthMonitor {
     };
   }
 
-  private async sendShutdownRequest(address: string, reason: string): Promise<boolean> {
+  private async sendShutdownRequest(
+    address: string,
+    reason: string,
+  ): Promise<boolean> {
     try {
       const message = this.messaging.createMessage({
         type: "shutdown_request",
@@ -486,8 +514,12 @@ export class HealthMonitor {
     }
   }
 
-  private selectReplacementAgent(sourceAddress: string): { address: string; name: string } | null {
-    const idle = this.agentTracker.getIdle().find((agent) => agent.address !== sourceAddress);
+  private selectReplacementAgent(
+    sourceAddress: string,
+  ): { address: string; name: string } | null {
+    const idle = this.agentTracker
+      .getIdle()
+      .find((agent) => agent.address !== sourceAddress);
     if (idle) {
       return {
         address: idle.address,
@@ -504,7 +536,9 @@ export class HealthMonitor {
   }
 }
 
-function latestIso(candidates: Array<string | null | undefined>): string | null {
+function latestIso(
+  candidates: Array<string | null | undefined>,
+): string | null {
   let latest: { iso: string; ms: number } | null = null;
 
   for (const value of candidates) {

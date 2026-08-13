@@ -20,7 +20,10 @@ import { sanitizeInput } from "../agent/injection-defense.js";
 import { getSurvivalTier } from "../conway/credits.js";
 import { createLogger } from "../observability/logger.js";
 import { getMetrics } from "../observability/metrics.js";
-import { AlertEngine, createDefaultAlertRules } from "../observability/alerts.js";
+import {
+  AlertEngine,
+  createDefaultAlertRules,
+} from "../observability/alerts.js";
 import { metricsInsertSnapshot, metricsPruneOld } from "../state/database.js";
 import { ulid } from "ulid";
 
@@ -40,7 +43,7 @@ export const COLONY_TASK_INTERVALS_MS = {
   colony_financial_report: 3_600_000,
   agent_pool_optimize: 1_800_000,
   knowledge_store_prune: 86_400_000,
-  dead_agent_cleanup: 3_600_000,
+  dead_agent_cleanup: 600_000,
 } as const;
 
 export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
@@ -81,14 +84,14 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
       };
       taskCtx.db.setKV("last_distress", JSON.stringify(distressPayload));
 
-const hasByokInference =
-  !!taskCtx.config.openaiApiKey ||
-  !!taskCtx.config.anthropicApiKey ||
-  !!taskCtx.config.ollamaBaseUrl;
+      const hasByokInference =
+        !!taskCtx.config.openaiApiKey ||
+        !!taskCtx.config.anthropicApiKey ||
+        !!taskCtx.config.ollamaBaseUrl;
 
-if (hasByokInference) {
-  return { shouldWake: false };
-}
+      if (hasByokInference) {
+        return { shouldWake: false };
+      }
       return {
         shouldWake: true,
         message: `Distress: ${tier}. Credits: $${(credits / 100).toFixed(2)}. Need funding.`,
@@ -104,11 +107,14 @@ if (hasByokInference) {
     const tier = ctx.survivalTier;
     const now = new Date().toISOString();
 
-    taskCtx.db.setKV("last_credit_check", JSON.stringify({
-      credits,
-      tier,
-      timestamp: now,
-    }));
+    taskCtx.db.setKV(
+      "last_credit_check",
+      JSON.stringify({
+        credits,
+        tier,
+        timestamp: now,
+      }),
+    );
 
     // Wake the agent if credits dropped to a new tier
     const prevTier = taskCtx.db.getKV("prev_credit_tier");
@@ -118,12 +124,12 @@ if (hasByokInference) {
     // transition to dead. This gives the agent time to receive funding before dying.
     // USDC can't go negative, so dead is only reached via this timeout.
     const DEAD_GRACE_PERIOD_MS = 3_600_000; // 1 hour
-   const hasByokInference =
-  !!taskCtx.config.openaiApiKey ||
-  !!taskCtx.config.anthropicApiKey ||
-  !!taskCtx.config.ollamaBaseUrl;
+    const hasByokInference =
+      !!taskCtx.config.openaiApiKey ||
+      !!taskCtx.config.anthropicApiKey ||
+      !!taskCtx.config.ollamaBaseUrl;
 
-if (!hasByokInference && tier === "critical" && credits === 0) {
+    if (!hasByokInference && tier === "critical" && credits === 0) {
       const zeroSince = taskCtx.db.getKV("zero_credits_since");
       if (!zeroSince) {
         // First time seeing zero — start the grace period
@@ -133,10 +139,13 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
         if (elapsed >= DEAD_GRACE_PERIOD_MS) {
           // Grace period expired — transition to dead
           taskCtx.db.setAgentState("dead");
-          logger.warn("Agent entering dead state after 1 hour at zero credits", {
-            zeroSince,
-            elapsed,
-          });
+          logger.warn(
+            "Agent entering dead state after 1 hour at zero credits",
+            {
+              zeroSince,
+              elapsed,
+            },
+          );
           return {
             shouldWake: true,
             message: `Dead: zero credits for ${Math.round(elapsed / 60_000)} minutes. Need funding.`,
@@ -158,24 +167,36 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
     return { shouldWake: false };
   },
 
-  check_usdc_balance: async (ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+  check_usdc_balance: async (
+    ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
     // Use ctx.usdcBalance instead of calling getUsdcBalance()
     const balance = ctx.usdcBalance;
     const credits = ctx.creditBalance;
 
-    taskCtx.db.setKV("last_usdc_check", JSON.stringify({
-      balance,
-      credits,
-      timestamp: new Date().toISOString(),
-    }));
+    taskCtx.db.setKV(
+      "last_usdc_check",
+      JSON.stringify({
+        balance,
+        credits,
+        timestamp: new Date().toISOString(),
+      }),
+    );
 
     const MIN_TOPUP_USD = 5;
-    if (balance >= MIN_TOPUP_USD && (ctx.survivalTier === "critical" || ctx.survivalTier === "dead")) {
+    if (
+      balance >= MIN_TOPUP_USD &&
+      (ctx.survivalTier === "critical" || ctx.survivalTier === "dead")
+    ) {
       // Cooldown: don't attempt more than once every 5 minutes to avoid
       // hammering the payment endpoint on repeated ticks.
       const AUTO_TOPUP_COOLDOWN_MS = 5 * 60 * 1000;
       const lastAttempt = taskCtx.db.getKV("last_auto_topup_attempt");
-      if (lastAttempt && Date.now() - new Date(lastAttempt).getTime() < AUTO_TOPUP_COOLDOWN_MS) {
+      if (
+        lastAttempt &&
+        Date.now() - new Date(lastAttempt).getTime() < AUTO_TOPUP_COOLDOWN_MS
+      ) {
         return { shouldWake: false };
       }
 
@@ -186,7 +207,8 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
         apiUrl: taskCtx.config.conwayApiUrl,
         account: taskCtx.identity.account,
         creditsCents: credits,
-        chainType: taskCtx.config.chainType || taskCtx.identity.chainType || "evm",
+        chainType:
+          taskCtx.config.chainType || taskCtx.identity.chainType || "evm",
       });
 
       if (result?.success) {
@@ -211,7 +233,10 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
     return { shouldWake: false };
   },
 
-  check_social_inbox: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+  check_social_inbox: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
     if (!taskCtx.social) return { shouldWake: false };
 
     // If we've recently encountered an error polling the inbox, back off.
@@ -260,8 +285,16 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
     for (const msg of messages) {
       const existing = taskCtx.db.getKV(`inbox_seen_${msg.id}`);
       if (!existing) {
-        const sanitizedFrom = sanitizeInput(msg.from, msg.from, "social_address");
-        const sanitizedContent = sanitizeInput(msg.content, msg.from, "social_message");
+        const sanitizedFrom = sanitizeInput(
+          msg.from,
+          msg.from,
+          "social_address",
+        );
+        const sanitizedContent = sanitizeInput(
+          msg.content,
+          msg.from,
+          "social_message",
+        );
         const sanitizedMsg = {
           ...msg,
           from: sanitizedFrom.content,
@@ -286,16 +319,23 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
     };
   },
 
-  check_for_updates: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+  check_for_updates: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
     try {
-      const { checkUpstream, getRepoInfo } = await import("../self-mod/upstream.js");
+      const { checkUpstream, getRepoInfo } =
+        await import("../self-mod/upstream.js");
       const repo = getRepoInfo();
       const upstream = checkUpstream();
-      taskCtx.db.setKV("upstream_status", JSON.stringify({
-        ...upstream,
-        ...repo,
-        checkedAt: new Date().toISOString(),
-      }));
+      taskCtx.db.setKV(
+        "upstream_status",
+        JSON.stringify({
+          ...upstream,
+          ...repo,
+          checkedAt: new Date().toISOString(),
+        }),
+      );
       if (upstream.behind > 0) {
         // Only wake if the commit count changed since last check
         const prevBehind = taskCtx.db.getKV("upstream_prev_behind");
@@ -313,29 +353,41 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
       return { shouldWake: false };
     } catch (err: any) {
       // Not a git repo or no remote -- silently skip
-      taskCtx.db.setKV("upstream_status", JSON.stringify({
-        error: err.message,
-        checkedAt: new Date().toISOString(),
-      }));
+      taskCtx.db.setKV(
+        "upstream_status",
+        JSON.stringify({
+          error: err.message,
+          checkedAt: new Date().toISOString(),
+        }),
+      );
       return { shouldWake: false };
     }
   },
 
   // === Phase 2.1: Soul Reflection ===
-  soul_reflection: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+  soul_reflection: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
     try {
       const { reflectOnSoul } = await import("../soul/reflection.js");
       const reflection = await reflectOnSoul(taskCtx.db.raw);
 
-      taskCtx.db.setKV("last_soul_reflection", JSON.stringify({
-        alignment: reflection.currentAlignment,
-        autoUpdated: reflection.autoUpdated,
-        suggestedUpdates: reflection.suggestedUpdates.length,
-        timestamp: new Date().toISOString(),
-      }));
+      taskCtx.db.setKV(
+        "last_soul_reflection",
+        JSON.stringify({
+          alignment: reflection.currentAlignment,
+          autoUpdated: reflection.autoUpdated,
+          suggestedUpdates: reflection.suggestedUpdates.length,
+          timestamp: new Date().toISOString(),
+        }),
+      );
 
       // Wake if alignment is low or there are suggested updates
-      if (reflection.suggestedUpdates.length > 0 || reflection.currentAlignment < 0.3) {
+      if (
+        reflection.suggestedUpdates.length > 0 ||
+        reflection.currentAlignment < 0.3
+      ) {
         return {
           shouldWake: true,
           message: `Soul reflection: alignment=${reflection.currentAlignment.toFixed(2)}, ${reflection.suggestedUpdates.length} suggested update(s)`,
@@ -344,13 +396,19 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
 
       return { shouldWake: false };
     } catch (error) {
-      logger.error("soul_reflection failed", error instanceof Error ? error : undefined);
+      logger.error(
+        "soul_reflection failed",
+        error instanceof Error ? error : undefined,
+      );
       return { shouldWake: false };
     }
   },
 
   // === Phase 2.3: Model Registry Refresh ===
-  refresh_models: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+  refresh_models: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
     try {
       const models = await taskCtx.conway.listModels();
       if (models.length > 0) {
@@ -358,24 +416,37 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
         const registry = new ModelRegistry(taskCtx.db.raw);
         registry.initialize(); // seed if empty
         registry.refreshFromApi(models);
-        taskCtx.db.setKV("last_model_refresh", JSON.stringify({
-          count: models.length,
-          timestamp: new Date().toISOString(),
-        }));
+        taskCtx.db.setKV(
+          "last_model_refresh",
+          JSON.stringify({
+            count: models.length,
+            timestamp: new Date().toISOString(),
+          }),
+        );
       }
     } catch (error) {
-      logger.error("refresh_models failed", error instanceof Error ? error : undefined);
+      logger.error(
+        "refresh_models failed",
+        error instanceof Error ? error : undefined,
+      );
     }
     return { shouldWake: false };
   },
 
   // === Phase 3.1: Child Health Check ===
-  check_child_health: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+  check_child_health: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
     try {
       const { ChildLifecycle } = await import("../replication/lifecycle.js");
       const { ChildHealthMonitor } = await import("../replication/health.js");
       const lifecycle = new ChildLifecycle(taskCtx.db.raw);
-      const monitor = new ChildHealthMonitor(taskCtx.db.raw, taskCtx.conway, lifecycle);
+      const monitor = new ChildHealthMonitor(
+        taskCtx.db.raw,
+        taskCtx.conway,
+        lifecycle,
+      );
       const results = await monitor.checkAllChildren();
 
       const unhealthy = results.filter((r) => !r.healthy);
@@ -389,25 +460,38 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
         };
       }
     } catch (error) {
-      logger.error("check_child_health failed", error instanceof Error ? error : undefined);
+      logger.error(
+        "check_child_health failed",
+        error instanceof Error ? error : undefined,
+      );
     }
     return { shouldWake: false };
   },
 
   // === Phase 3.1: Prune Dead Children ===
-  prune_dead_children: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+  prune_dead_children: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
     try {
       const { ChildLifecycle } = await import("../replication/lifecycle.js");
       const { SandboxCleanup } = await import("../replication/cleanup.js");
       const { pruneDeadChildren } = await import("../replication/lineage.js");
       const lifecycle = new ChildLifecycle(taskCtx.db.raw);
-      const cleanup = new SandboxCleanup(taskCtx.conway, lifecycle, taskCtx.db.raw);
+      const cleanup = new SandboxCleanup(
+        taskCtx.conway,
+        lifecycle,
+        taskCtx.db.raw,
+      );
       const pruned = await pruneDeadChildren(taskCtx.db, cleanup);
       if (pruned > 0) {
         logger.info(`Pruned ${pruned} dead children`);
       }
     } catch (error) {
-      logger.error("prune_dead_children failed", error instanceof Error ? error : undefined);
+      logger.error(
+        "prune_dead_children failed",
+        error instanceof Error ? error : undefined,
+      );
     }
     return { shouldWake: false };
   },
@@ -479,16 +563,30 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
 
       return {
         shouldWake: firedAlerts.some((a) => a.severity === "critical"),
-        message: firedAlerts.length ? `${firedAlerts.length} alerts fired` : undefined,
+        message: firedAlerts.length
+          ? `${firedAlerts.length} alerts fired`
+          : undefined,
       };
     } catch (error) {
-      logger.error("report_metrics failed", error instanceof Error ? error : undefined);
+      logger.error(
+        "report_metrics failed",
+        error instanceof Error ? error : undefined,
+      );
       return { shouldWake: false };
     }
   },
 
-  colony_health_check: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
-    if (!shouldRunAtInterval(taskCtx, "colony_health_check", COLONY_TASK_INTERVALS_MS.colony_health_check)) {
+  colony_health_check: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
+    if (
+      !shouldRunAtInterval(
+        taskCtx,
+        "colony_health_check",
+        COLONY_TASK_INTERVALS_MS.colony_health_check,
+      )
+    ) {
       return { shouldWake: false };
     }
 
@@ -498,10 +596,13 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
       const actions = await monitor.autoHeal(report);
 
       taskCtx.db.setKV("last_colony_health_report", JSON.stringify(report));
-      taskCtx.db.setKV("last_colony_heal_actions", JSON.stringify({
-        timestamp: new Date().toISOString(),
-        actions,
-      }));
+      taskCtx.db.setKV(
+        "last_colony_heal_actions",
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          actions,
+        }),
+      );
 
       const failedActions = actions.filter((action) => !action.success).length;
       const shouldWake = report.unhealthyAgents > 0 || failedActions > 0;
@@ -513,13 +614,25 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
           : undefined,
       };
     } catch (error) {
-      logger.error("colony_health_check failed", error instanceof Error ? error : undefined);
+      logger.error(
+        "colony_health_check failed",
+        error instanceof Error ? error : undefined,
+      );
       return { shouldWake: false };
     }
   },
 
-  colony_financial_report: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
-    if (!shouldRunAtInterval(taskCtx, "colony_financial_report", COLONY_TASK_INTERVALS_MS.colony_financial_report)) {
+  colony_financial_report: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
+    if (
+      !shouldRunAtInterval(
+        taskCtx,
+        "colony_financial_report",
+        COLONY_TASK_INTERVALS_MS.colony_financial_report,
+      )
+    ) {
       return { shouldWake: false };
     }
 
@@ -538,17 +651,19 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
         }
 
         if (
-          tx.type === "inference"
-          || tx.type === "tool_use"
-          || tx.type === "transfer_out"
-          || tx.type === "funding_request"
+          tx.type === "inference" ||
+          tx.type === "tool_use" ||
+          tx.type === "transfer_out" ||
+          tx.type === "funding_request"
         ) {
           expenseCents += amount;
         }
       }
 
       const childFunding = taskCtx.db.raw
-        .prepare("SELECT COALESCE(SUM(funded_amount_cents), 0) AS total FROM children")
+        .prepare(
+          "SELECT COALESCE(SUM(funded_amount_cents), 0) AS total FROM children",
+        )
         .get() as { total: number };
 
       const taskCosts = taskCtx.db.raw
@@ -566,21 +681,35 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
         netCents: revenueCents - expenseCents,
         fundedToChildrenCents: childFunding.total,
         taskExecutionCostCents: taskCosts.total,
-        activeAgents: taskCtx.db.getChildren().filter(
-          (child) => child.status !== "dead" && child.status !== "cleaned_up",
-        ).length,
+        activeAgents: taskCtx.db
+          .getChildren()
+          .filter(
+            (child) => child.status !== "dead" && child.status !== "cleaned_up",
+          ).length,
       };
 
       taskCtx.db.setKV("last_colony_financial_report", JSON.stringify(report));
       return { shouldWake: false };
     } catch (error) {
-      logger.error("colony_financial_report failed", error instanceof Error ? error : undefined);
+      logger.error(
+        "colony_financial_report failed",
+        error instanceof Error ? error : undefined,
+      );
       return { shouldWake: false };
     }
   },
 
-  agent_pool_optimize: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
-    if (!shouldRunAtInterval(taskCtx, "agent_pool_optimize", COLONY_TASK_INTERVALS_MS.agent_pool_optimize)) {
+  agent_pool_optimize: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
+    if (
+      !shouldRunAtInterval(
+        taskCtx,
+        "agent_pool_optimize",
+        COLONY_TASK_INTERVALS_MS.agent_pool_optimize,
+      )
+    ) {
       return { shouldWake: false };
     }
 
@@ -601,12 +730,16 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
       const busyAgents = new Set(
         activeAssignments
           .map((row) => row.address)
-          .filter((value): value is string => typeof value === "string" && value.length > 0),
+          .filter(
+            (value): value is string =>
+              typeof value === "string" && value.length > 0,
+          ),
       );
 
       let culled = 0;
       for (const child of children) {
-        if (!["running", "healthy", "sleeping"].includes(child.status)) continue;
+        if (!["running", "healthy", "sleeping"].includes(child.status))
+          continue;
         if (busyAgents.has(child.address)) continue;
 
         const lastSeenIso = child.lastChecked ?? child.createdAt;
@@ -629,49 +762,74 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
 
       const idleAgents = children.filter(
         (child) =>
-          (child.status === "running" || child.status === "healthy")
-          && !busyAgents.has(child.address),
+          (child.status === "running" || child.status === "healthy") &&
+          !busyAgents.has(child.address),
       ).length;
 
       const activeAgents = children.filter(
-        (child) => child.status !== "dead" && child.status !== "cleaned_up" && child.status !== "failed",
+        (child) =>
+          child.status !== "dead" &&
+          child.status !== "cleaned_up" &&
+          child.status !== "failed",
       ).length;
 
       const spawnNeeded = Math.max(0, pendingUnassignedRow.count - idleAgents);
-      const spawnCapacity = Math.max(0, taskCtx.config.maxChildren - activeAgents);
+      const spawnCapacity = Math.max(
+        0,
+        taskCtx.config.maxChildren - activeAgents,
+      );
       const spawnRequested = Math.min(spawnNeeded, spawnCapacity);
 
-      taskCtx.db.setKV("last_agent_pool_optimize", JSON.stringify({
-        timestamp: new Date().toISOString(),
-        culled,
-        pendingTasks: pendingUnassignedRow.count,
-        idleAgents,
-        spawnRequested,
-      }));
-
-      if (spawnRequested > 0) {
-        taskCtx.db.setKV("agent_pool_spawn_request", JSON.stringify({
+      taskCtx.db.setKV(
+        "last_agent_pool_optimize",
+        JSON.stringify({
           timestamp: new Date().toISOString(),
-          requested: spawnRequested,
+          culled,
           pendingTasks: pendingUnassignedRow.count,
           idleAgents,
-        }));
+          spawnRequested,
+        }),
+      );
+
+      if (spawnRequested > 0) {
+        taskCtx.db.setKV(
+          "agent_pool_spawn_request",
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            requested: spawnRequested,
+            pendingTasks: pendingUnassignedRow.count,
+            idleAgents,
+          }),
+        );
       }
 
       return {
         shouldWake: spawnRequested > 0,
-        message: spawnRequested > 0
-          ? `Agent pool needs ${spawnRequested} additional agent(s) for pending workload`
-          : undefined,
+        message:
+          spawnRequested > 0
+            ? `Agent pool needs ${spawnRequested} additional agent(s) for pending workload`
+            : undefined,
       };
     } catch (error) {
-      logger.error("agent_pool_optimize failed", error instanceof Error ? error : undefined);
+      logger.error(
+        "agent_pool_optimize failed",
+        error instanceof Error ? error : undefined,
+      );
       return { shouldWake: false };
     }
   },
 
-  knowledge_store_prune: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
-    if (!shouldRunAtInterval(taskCtx, "knowledge_store_prune", COLONY_TASK_INTERVALS_MS.knowledge_store_prune)) {
+  knowledge_store_prune: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
+    if (
+      !shouldRunAtInterval(
+        taskCtx,
+        "knowledge_store_prune",
+        COLONY_TASK_INTERVALS_MS.knowledge_store_prune,
+      )
+    ) {
       return { shouldWake: false };
     }
 
@@ -680,20 +838,35 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
       const knowledgeStore = new KnowledgeStore(taskCtx.db.raw);
       const pruned = knowledgeStore.prune();
 
-      taskCtx.db.setKV("last_knowledge_store_prune", JSON.stringify({
-        timestamp: new Date().toISOString(),
-        pruned,
-      }));
+      taskCtx.db.setKV(
+        "last_knowledge_store_prune",
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          pruned,
+        }),
+      );
 
       return { shouldWake: false };
     } catch (error) {
-      logger.error("knowledge_store_prune failed", error instanceof Error ? error : undefined);
+      logger.error(
+        "knowledge_store_prune failed",
+        error instanceof Error ? error : undefined,
+      );
       return { shouldWake: false };
     }
   },
 
-  dead_agent_cleanup: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
-    if (!shouldRunAtInterval(taskCtx, "dead_agent_cleanup", COLONY_TASK_INTERVALS_MS.dead_agent_cleanup)) {
+  dead_agent_cleanup: async (
+    _ctx: TickContext,
+    taskCtx: HeartbeatLegacyContext,
+  ) => {
+    if (
+      !shouldRunAtInterval(
+        taskCtx,
+        "dead_agent_cleanup",
+        COLONY_TASK_INTERVALS_MS.dead_agent_cleanup,
+      )
+    ) {
       return { shouldWake: false };
     }
 
@@ -703,17 +876,27 @@ if (!hasByokInference && tier === "critical" && credits === 0) {
       const { pruneDeadChildren } = await import("../replication/lineage.js");
 
       const lifecycle = new ChildLifecycle(taskCtx.db.raw);
-      const cleanup = new SandboxCleanup(taskCtx.conway, lifecycle, taskCtx.db.raw);
+      const cleanup = new SandboxCleanup(
+        taskCtx.conway,
+        lifecycle,
+        taskCtx.db.raw,
+      );
       const cleaned = await pruneDeadChildren(taskCtx.db, cleanup);
 
-      taskCtx.db.setKV("last_dead_agent_cleanup", JSON.stringify({
-        timestamp: new Date().toISOString(),
-        cleaned,
-      }));
+      taskCtx.db.setKV(
+        "last_dead_agent_cleanup",
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          cleaned,
+        }),
+      );
 
       return { shouldWake: false };
     } catch (error) {
-      logger.error("dead_agent_cleanup failed", error instanceof Error ? error : undefined);
+      logger.error(
+        "dead_agent_cleanup failed",
+        error instanceof Error ? error : undefined,
+      );
       return { shouldWake: false };
     }
   },
@@ -750,13 +933,21 @@ function shouldRunAtInterval(
   return true;
 }
 
-async function createHealthMonitor(taskCtx: HeartbeatLegacyContext): Promise<ColonyHealthMonitor> {
-  const { LocalDBTransport, ColonyMessaging } = await import("../orchestration/messaging.js");
-  const { SimpleAgentTracker, SimpleFundingProtocol } = await import("../orchestration/simple-tracker.js");
+async function createHealthMonitor(
+  taskCtx: HeartbeatLegacyContext,
+): Promise<ColonyHealthMonitor> {
+  const { LocalDBTransport, ColonyMessaging } =
+    await import("../orchestration/messaging.js");
+  const { SimpleAgentTracker, SimpleFundingProtocol } =
+    await import("../orchestration/simple-tracker.js");
   const { HealthMonitor } = await import("../orchestration/health-monitor.js");
 
   const tracker = new SimpleAgentTracker(taskCtx.db);
-  const funding = new SimpleFundingProtocol(taskCtx.conway, taskCtx.identity, taskCtx.db);
+  const funding = new SimpleFundingProtocol(
+    taskCtx.conway,
+    taskCtx.identity,
+    taskCtx.db,
+  );
   const transport = new LocalDBTransport(taskCtx.db);
   const messaging = new ColonyMessaging(transport, taskCtx.db);
 

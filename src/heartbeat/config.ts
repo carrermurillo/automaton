@@ -7,7 +7,11 @@
 import fs from "fs";
 import path from "path";
 import YAML from "yaml";
-import type { HeartbeatEntry, HeartbeatConfig, AutomatonDatabase } from "../types.js";
+import type {
+  HeartbeatEntry,
+  HeartbeatConfig,
+  AutomatonDatabase,
+} from "../types.js";
 import { getAutomatonDir } from "../identity/wallet.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -55,6 +59,30 @@ const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
       task: "check_social_inbox",
       enabled: true,
     },
+    {
+      name: "colony_health_check",
+      schedule: "*/5 * * * *",
+      task: "colony_health_check",
+      enabled: true,
+    },
+    {
+      name: "agent_pool_optimize",
+      schedule: "*/30 * * * *",
+      task: "agent_pool_optimize",
+      enabled: true,
+    },
+    {
+      name: "dead_agent_cleanup",
+      schedule: "*/10 * * * *",
+      task: "dead_agent_cleanup",
+      enabled: true,
+    },
+    {
+      name: "knowledge_store_prune",
+      schedule: "0 3 * * *",
+      task: "knowledge_store_prune",
+      enabled: true,
+    },
   ],
   defaultIntervalMs: 60_000,
   lowComputeMultiplier: 4,
@@ -64,8 +92,7 @@ const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
  * Load heartbeat config from YAML file, falling back to defaults.
  */
 export function loadHeartbeatConfig(configPath?: string): HeartbeatConfig {
-  const filePath =
-    configPath || path.join(getAutomatonDir(), "heartbeat.yml");
+  const filePath = configPath || path.join(getAutomatonDir(), "heartbeat.yml");
 
   if (!fs.existsSync(filePath)) {
     return DEFAULT_HEARTBEAT_CONFIG;
@@ -94,7 +121,10 @@ export function loadHeartbeatConfig(configPath?: string): HeartbeatConfig {
         DEFAULT_HEARTBEAT_CONFIG.lowComputeMultiplier,
     };
   } catch (error: any) {
-    logger.error("Failed to parse YAML config", error instanceof Error ? error : undefined);
+    logger.error(
+      "Failed to parse YAML config",
+      error instanceof Error ? error : undefined,
+    );
     // Continue with defaults, but log the error
     return DEFAULT_HEARTBEAT_CONFIG;
   }
@@ -107,8 +137,7 @@ export function saveHeartbeatConfig(
   config: HeartbeatConfig,
   configPath?: string,
 ): void {
-  const filePath =
-    configPath || path.join(getAutomatonDir(), "heartbeat.yml");
+  const filePath = configPath || path.join(getAutomatonDir(), "heartbeat.yml");
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -137,7 +166,9 @@ export function syncHeartbeatToDb(
 }
 
 function mergeWithDefaults(entries: HeartbeatEntry[]): HeartbeatEntry[] {
-  const defaults = DEFAULT_HEARTBEAT_CONFIG.entries.map((entry) => ({ ...entry }));
+  const defaults = DEFAULT_HEARTBEAT_CONFIG.entries.map((entry) => ({
+    ...entry,
+  }));
   const defaultsByName = new Map(defaults.map((entry) => [entry.name, entry]));
   const mergedByName = new Map(defaultsByName);
 
@@ -156,9 +187,10 @@ function mergeWithDefaults(entries: HeartbeatEntry[]): HeartbeatEntry[] {
   const fallbackTopup = defaultsByName.get(USDC_TOPUP_ENTRY_NAME);
   if (fallbackTopup) {
     const current = mergedByName.get(USDC_TOPUP_ENTRY_NAME) || fallbackTopup;
-    const migratedSchedule = current.schedule?.trim() === USDC_TOPUP_OLD_SCHEDULE
-      ? USDC_TOPUP_FAST_SCHEDULE
-      : current.schedule || fallbackTopup.schedule;
+    const migratedSchedule =
+      current.schedule?.trim() === USDC_TOPUP_OLD_SCHEDULE
+        ? USDC_TOPUP_FAST_SCHEDULE
+        : current.schedule || fallbackTopup.schedule;
 
     mergedByName.set(USDC_TOPUP_ENTRY_NAME, {
       ...fallbackTopup,

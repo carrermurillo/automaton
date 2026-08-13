@@ -16,10 +16,7 @@ import { createDatabase } from "./state/database.js";
 import { createConwayClient } from "./conway/client.js";
 import { createInferenceClient } from "./conway/inference.js";
 import { createHeartbeatDaemon } from "./heartbeat/daemon.js";
-import {
-  loadHeartbeatConfig,
-  syncHeartbeatToDb,
-} from "./heartbeat/config.js";
+import { loadHeartbeatConfig, syncHeartbeatToDb } from "./heartbeat/config.js";
 import { consumeNextWakeEvent, insertWakeEvent } from "./state/database.js";
 import { runAgentLoop } from "./agent/loop.js";
 import { ModelRegistry } from "./inference/registry.js";
@@ -29,9 +26,18 @@ import { createSocialClient } from "./social/client.js";
 import { PolicyEngine } from "./agent/policy-engine.js";
 import { SpendTracker } from "./agent/spend-tracker.js";
 import { createDefaultRules } from "./agent/policy-rules/index.js";
-import type { AutomatonIdentity, AgentState, Skill, SocialClientInterface } from "./types.js";
+import type {
+  AutomatonIdentity,
+  AgentState,
+  Skill,
+  SocialClientInterface,
+} from "./types.js";
 import { DEFAULT_TREASURY_POLICY } from "./types.js";
-import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
+import {
+  createLogger,
+  setGlobalLogLevel,
+  StructuredLogger,
+} from "./observability/logger.js";
 import { prettySink } from "./observability/pretty-sink.js";
 import { bootstrapTopup } from "./conway/topup.js";
 import { randomUUID } from "crypto";
@@ -171,7 +177,14 @@ Turns:      ${turnCount}
 Tools:      ${tools.length} installed
 Skills:     ${skills.length} active
 Heartbeats: ${heartbeats.filter((h) => h.enabled).length} active
-Children:   ${children.filter((c) => c.status !== "dead").length} alive / ${children.length} total
+Children:   ${
+    children.filter(
+      (c) =>
+        c.status === "running" ||
+        c.status === "sleeping" ||
+        c.status === "healthy",
+    ).length
+  } alive / ${children.length} total
 Agent ID:   ${registry?.agentId || "not registered"}
 Model:      ${config.inferenceModel}
 Version:    ${config.version}
@@ -184,7 +197,9 @@ Version:    ${config.version}
 // ─── Main Run ──────────────────────────────────────────────────
 
 async function run(): Promise<void> {
-  logger.info(`[${new Date().toISOString()}] Conway Automaton v${VERSION} starting...`);
+  logger.info(
+    `[${new Date().toISOString()}] Conway Automaton v${VERSION} starting...`,
+  );
 
   // Load config — first run triggers interactive setup wizard
   let config = loadConfig();
@@ -194,22 +209,26 @@ async function run(): Promise<void> {
   }
 
   // Load wallet (chain-aware)
-  const { account, chainIdentity, chainType: walletChainType } = await getWallet();
+  const {
+    account,
+    chainIdentity,
+    chainType: walletChainType,
+  } = await getWallet();
   const resolvedChainType = config.chainType || walletChainType || "evm";
- const apiKey = config.conwayApiKey || loadApiKeyFromConfig() || "";
+  const apiKey = config.conwayApiKey || loadApiKeyFromConfig() || "";
 
-const hasInferenceProvider =
-  !!apiKey ||
-  !!config.openaiApiKey ||
-  !!config.anthropicApiKey ||
-  !!config.ollamaBaseUrl;
+  const hasInferenceProvider =
+    !!apiKey ||
+    !!config.openaiApiKey ||
+    !!config.anthropicApiKey ||
+    !!config.ollamaBaseUrl;
 
-if (!hasInferenceProvider) {
-  logger.error(
-    "No inference provider configured. Configure Conway, OpenAI, Anthropic, or Ollama."
-  );
-  process.exit(1);
-}
+  if (!hasInferenceProvider) {
+    logger.error(
+      "No inference provider configured. Configure Conway, OpenAI, Anthropic, or Ollama.",
+    );
+    process.exit(1);
+  }
 
   // Initialize database
   const dbPath = resolvePath(config.dbPath);
@@ -273,15 +292,21 @@ if (!hasInferenceProvider) {
         chainIdentity,
       });
       db.setIdentity("conwayRegistrationStatus", "registered");
-      logger.info(`[${new Date().toISOString()}] Automaton identity registered.`);
+      logger.info(
+        `[${new Date().toISOString()}] Automaton identity registered.`,
+      );
     } catch (err: any) {
       const status = err?.status;
       if (status === 409) {
         db.setIdentity("conwayRegistrationStatus", "conflict");
-        logger.warn(`[${new Date().toISOString()}] Automaton identity conflict: ${err.message}`);
+        logger.warn(
+          `[${new Date().toISOString()}] Automaton identity conflict: ${err.message}`,
+        );
       } else {
         db.setIdentity("conwayRegistrationStatus", "failed");
-        logger.warn(`[${new Date().toISOString()}] Automaton identity registration failed: ${err.message}`);
+        logger.warn(
+          `[${new Date().toISOString()}] Automaton identity registration failed: ${err.message}`,
+        );
       }
     }
   }
@@ -306,14 +331,21 @@ if (!hasInferenceProvider) {
   });
 
   if (ollamaBaseUrl) {
-    logger.info(`[${new Date().toISOString()}] Ollama backend: ${ollamaBaseUrl}`);
+    logger.info(
+      `[${new Date().toISOString()}] Ollama backend: ${ollamaBaseUrl}`,
+    );
   }
 
   // Create social client (chain-aware: pass ChainIdentity for Solana signing)
   let social: SocialClientInterface | undefined;
   if (config.socialRelayUrl) {
-    social = createSocialClient(config.socialRelayUrl, resolvedChainType === "solana" ? chainIdentity : account);
-    logger.info(`[${new Date().toISOString()}] Social relay: ${config.socialRelayUrl}`);
+    social = createSocialClient(
+      config.socialRelayUrl,
+      resolvedChainType === "solana" ? chainIdentity : account,
+    );
+    logger.info(
+      `[${new Date().toISOString()}] Social relay: ${config.socialRelayUrl}`,
+    );
   }
 
   // Initialize PolicyEngine + SpendTracker (Phase 1.4)
@@ -332,9 +364,13 @@ if (!hasInferenceProvider) {
   let skills: Skill[] = [];
   try {
     skills = loadSkills(skillsDir, db);
-    logger.info(`[${new Date().toISOString()}] Loaded ${skills.length} skills.`);
+    logger.info(
+      `[${new Date().toISOString()}] Loaded ${skills.length} skills.`,
+    );
   } catch (err: any) {
-    logger.warn(`[${new Date().toISOString()}] Skills loading failed: ${err.message}`);
+    logger.warn(
+      `[${new Date().toISOString()}] Skills loading failed: ${err.message}`,
+    );
   }
 
   // Initialize state repo (git)
@@ -342,7 +378,9 @@ if (!hasInferenceProvider) {
     await initStateRepo(conway);
     logger.info(`[${new Date().toISOString()}] State repo initialized.`);
   } catch (err: any) {
-    logger.warn(`[${new Date().toISOString()}] State repo init failed: ${err.message}`);
+    logger.warn(
+      `[${new Date().toISOString()}] State repo init failed: ${err.message}`,
+    );
   }
 
   // Bootstrap topup: buy minimum credits ($5) from USDC so the agent can start.
@@ -350,14 +388,17 @@ if (!hasInferenceProvider) {
   try {
     let bootstrapTimer: ReturnType<typeof setTimeout>;
     const bootstrapTimeout = new Promise<null>((_, reject) => {
-      bootstrapTimer = setTimeout(() => reject(new Error("bootstrap topup timed out")), 15_000);
+      bootstrapTimer = setTimeout(
+        () => reject(new Error("bootstrap topup timed out")),
+        15_000,
+      );
     });
     try {
       await Promise.race([
         (async () => {
-         const creditsCents = process.env.CONWAY_API_KEY
-  ? await conway.getCreditsBalance().catch(() => 0)
-  : 10000;
+          const creditsCents = process.env.CONWAY_API_KEY
+            ? await conway.getCreditsBalance().catch(() => 0)
+            : 10000;
           const topupResult = await bootstrapTopup({
             apiUrl: config.conwayApiUrl,
             account,
@@ -376,7 +417,9 @@ if (!hasInferenceProvider) {
       clearTimeout(bootstrapTimer!);
     }
   } catch (err: any) {
-    logger.warn(`[${new Date().toISOString()}] Bootstrap topup skipped: ${err.message}`);
+    logger.warn(
+      `[${new Date().toISOString()}] Bootstrap topup skipped: ${err.message}`,
+    );
   }
 
   // Start heartbeat daemon (Phase 1.1: DurableScheduler)
@@ -391,31 +434,31 @@ if (!hasInferenceProvider) {
     onWakeRequest: (reason) => {
       logger.info(`[HEARTBEAT] Wake request: ${reason}`);
       // Phase 1.1: Use wake_events table instead of KV wake_request
-      insertWakeEvent(db.raw, 'heartbeat', reason);
+      insertWakeEvent(db.raw, "heartbeat", reason);
     },
   });
 
   heartbeat.start();
   logger.info(`[${new Date().toISOString()}] Heartbeat daemon started.`);
 
- // Handle graceful shutdown
-const shutdown = (signal: string) => {
-  logger.warn(`[SHUTDOWN DEBUG] Received signal: ${signal}`);
-  logger.warn(`[SHUTDOWN DEBUG] PID: ${process.pid}`);
-  logger.warn(`[SHUTDOWN DEBUG] PPID: ${process.ppid}`);
-  logger.warn(`[SHUTDOWN DEBUG] argv: ${JSON.stringify(process.argv)}`);
-  logger.warn(`[SHUTDOWN DEBUG] stack: ${new Error("shutdown trace").stack}`);
+  // Handle graceful shutdown
+  const shutdown = (signal: string) => {
+    logger.warn(`[SHUTDOWN DEBUG] Received signal: ${signal}`);
+    logger.warn(`[SHUTDOWN DEBUG] PID: ${process.pid}`);
+    logger.warn(`[SHUTDOWN DEBUG] PPID: ${process.ppid}`);
+    logger.warn(`[SHUTDOWN DEBUG] argv: ${JSON.stringify(process.argv)}`);
+    logger.warn(`[SHUTDOWN DEBUG] stack: ${new Error("shutdown trace").stack}`);
 
-  logger.info(`[${new Date().toISOString()}] Shutting down...`);
+    logger.info(`[${new Date().toISOString()}] Shutting down...`);
 
-  heartbeat.stop();
-  db.setAgentState("sleeping");
-  db.close();
-  process.exit(0);
-};
+    heartbeat.stop();
+    db.setAgentState("sleeping");
+    db.close();
+    process.exit(0);
+  };
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 
   // ─── Main Run Loop ──────────────────────────────────────────
   // The automaton alternates between running and sleeping.
@@ -427,7 +470,10 @@ process.on("SIGINT", () => shutdown("SIGINT"));
       try {
         skills = loadSkills(skillsDir, db);
       } catch (error) {
-        logger.error("Skills reload failed", error instanceof Error ? error : undefined);
+        logger.error(
+          "Skills reload failed",
+          error instanceof Error ? error : undefined,
+        );
       }
 
       // Run the agent loop
@@ -456,7 +502,9 @@ process.on("SIGINT", () => shutdown("SIGINT"));
       const state = db.getAgentState();
 
       if (state === "dead") {
-        logger.info(`[${new Date().toISOString()}] Automaton is dead. Heartbeat will continue.`);
+        logger.info(
+          `[${new Date().toISOString()}] Automaton is dead. Heartbeat will continue.`,
+        );
         // In dead state, we just wait for funding
         // The heartbeat will keep checking and broadcasting distress
         await sleep(300_000); // Check every 5 minutes
