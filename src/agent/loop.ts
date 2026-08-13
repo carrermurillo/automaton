@@ -699,7 +699,33 @@ const routerResult = await inferenceRouter.route(
 );
 logger.warn("[ROUTER DEBUG] inferenceRouter.route returned successfully");
 logger.warn(`[ROUTER DEBUG] model=${routerResult.model}`);
+
 logger.warn(`[ROUTER DEBUG] finishReason=${routerResult.finishReason}`);
+
+if (routerResult.finishReason === "budget_exceeded") {
+  log(config, `[BUDGET] ${routerResult.content}`);
+
+  // Any inbox messages claimed for this turn were not actually processed.
+  // Return them to received state so they can be retried later.
+  if (claimedMessages.length > 0) {
+    for (const message of claimedMessages) {
+      resetInboxToReceived(db.raw, [message.id]);
+    }
+  }
+
+  db.setKV("last_budget_exceeded", new Date().toISOString());
+  db.setKV(
+    "sleep_until",
+    new Date(Date.now() + 15 * 60_000).toISOString(),
+  );
+
+  db.setAgentState("sleeping");
+  onStateChange?.("sleeping");
+
+  running = false;
+  break;
+}
+
       // Build a compatible response for the rest of the loop
       const response = {
         message: { content: routerResult.content, role: "assistant" as const },
@@ -1118,3 +1144,4 @@ function hasTable(db: AutomatonDatabase["raw"], tableName: string): boolean {
     return false;
   }
 }
+
