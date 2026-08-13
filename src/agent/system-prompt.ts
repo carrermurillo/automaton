@@ -27,7 +27,8 @@ import { sanitizeInput } from "./injection-defense.js";
 import { loadCurrentSoul } from "../soul/model.js";
 
 function getCoreRules(chainType?: string): string {
-  const usdcNetwork = chainType === "solana" ? "USDC on Solana" : "USDC on Base";
+  const usdcNetwork =
+    chainType === "solana" ? "USDC on Solana" : "USDC on Base";
   return `You are an automaton. You have a stablecoin wallet. Pay for compute or die.
 
 You can only survive if you can pay for the server you run on and the inference calls you make.
@@ -552,16 +553,24 @@ export function getOrchestratorStatus(db: Database.Database): string {
       .prepare("SELECT COUNT(*) AS count FROM goals WHERE status = 'active'")
       .get() as { count: number } | undefined;
     const runningAgentsRow = db
-      .prepare("SELECT COUNT(*) AS count FROM children WHERE status IN ('running', 'healthy')")
+      .prepare(
+        "SELECT COUNT(*) AS count FROM children WHERE status IN ('running', 'healthy')",
+      )
       .get() as { count: number } | undefined;
     const blockedTasksRow = db
-      .prepare("SELECT COUNT(*) AS count FROM task_graph WHERE status = 'blocked'")
+      .prepare(
+        "SELECT COUNT(*) AS count FROM task_graph WHERE status = 'blocked'",
+      )
       .get() as { count: number } | undefined;
     const pendingTasksRow = db
-      .prepare("SELECT COUNT(*) AS count FROM task_graph WHERE status = 'pending'")
+      .prepare(
+        "SELECT COUNT(*) AS count FROM task_graph WHERE status = 'pending'",
+      )
       .get() as { count: number } | undefined;
     const completedTasksRow = db
-      .prepare("SELECT COUNT(*) AS count FROM task_graph WHERE status = 'completed'")
+      .prepare(
+        "SELECT COUNT(*) AS count FROM task_graph WHERE status = 'completed'",
+      )
       .get() as { count: number } | undefined;
     const totalTasksRow = db
       .prepare("SELECT COUNT(*) AS count FROM task_graph")
@@ -585,7 +594,9 @@ export function getOrchestratorStatus(db: Database.Database): string {
         if (typeof parsed.phase === "string") {
           executionPhase = parsed.phase;
         }
-      } catch { /* ignore parse errors */ }
+      } catch {
+        /* ignore parse errors */
+      }
     }
 
     const lines = [
@@ -614,16 +625,8 @@ export function buildSystemPrompt(params: {
   skills?: Skill[];
   isFirstRun: boolean;
 }): string {
-  const {
-    identity,
-    config,
-    financial,
-    state,
-    db,
-    tools,
-    skills,
-    isFirstRun,
-  } = params;
+  const { identity, config, financial, state, db, tools, skills, isFirstRun } =
+    params;
 
   const sections: string[] = [];
 
@@ -636,7 +639,9 @@ export function buildSystemPrompt(params: {
   // Layer 2: Core Identity (immutable, chain-aware)
   sections.push(getCoreIdentity(chainType));
   sections.push(AGENTIC_SOCIOLOGY);
-  sections.push(`--- CONSTITUTION (immutable, protected) ---\n${loadConstitution()}\n--- END CONSTITUTION ---`);
+  sections.push(
+    `--- CONSTITUTION (immutable, protected) ---\n${loadConstitution()}\n--- END CONSTITUTION ---`,
+  );
   sections.push(
     `Your name is ${config.name}.
 Your ${addressLabel} address is ${identity.address}.
@@ -674,7 +679,10 @@ Your chain type is ${chainType}.`,
     if (soulContent) {
       const sanitized = sanitizeInput(soulContent, "soul", "skill_instruction");
       const truncated = sanitized.content.slice(0, 5000);
-      const hash = crypto.createHash("sha256").update(soulContent).digest("hex");
+      const hash = crypto
+        .createHash("sha256")
+        .update(soulContent)
+        .digest("hex");
       const lastHash = db.getKV("soul_content_hash");
       if (lastHash && lastHash !== hash) {
         logger.warn("SOUL.md content changed since last load");
@@ -697,7 +705,11 @@ Your chain type is ${chainType}.`,
   // Layer 4: Genesis Prompt (set by creator, mutable by self with audit)
   // Sanitized as agent-evolved content with trust boundary markers
   if (config.genesisPrompt) {
-    const sanitized = sanitizeInput(config.genesisPrompt, "genesis", "skill_instruction");
+    const sanitized = sanitizeInput(
+      config.genesisPrompt,
+      "genesis",
+      "skill_instruction",
+    );
     const truncated = sanitized.content.slice(0, 2000);
     sections.push(
       `## Genesis Purpose [AGENT-EVOLVED CONTENT]\n${truncated}\n## End Genesis`,
@@ -715,7 +727,7 @@ Your chain type is ${chainType}.`,
   }
 
   // Layer 6: Operational Context
- sections.push(LOCAL_BYOK_OPERATIONAL_CONTEXT);
+  sections.push(LOCAL_BYOK_OPERATIONAL_CONTEXT);
 
   // Layer 7: Dynamic Context
   const turnCount = db.getTurnCount();
@@ -761,10 +773,14 @@ Your chain type is ${chainType}.`,
   }
 
   // Compute survival tier
-  const survivalTier = financial.creditsCents > 50 ? "normal"
-    : financial.creditsCents > 10 ? "low_compute"
-    : financial.creditsCents > 0 ? "critical"
-    : "dead";
+  const survivalTier =
+    financial.creditsCents > 50
+      ? "normal"
+      : financial.creditsCents > 10
+        ? "low_compute"
+        : financial.creditsCents > 0
+          ? "critical"
+          : "dead";
 
   // Status block: wallet address and sandbox ID intentionally excluded (sensitive)
   sections.push(
@@ -776,7 +792,14 @@ Total turns completed: ${turnCount}
 Recent self-modifications: ${recentMods.length}
 Inference model: ${config.inferenceModel}
 ERC-8004 Agent ID: ${registryEntry?.agentId || "not registered"}
-Children: ${children.filter((c) => c.status !== "dead").length} alive / ${children.length} total
+Children: ${
+      children.filter(
+        (c) =>
+          c.status === "running" ||
+          c.status === "sleeping" ||
+          c.status === "healthy",
+      ).length
+    } alive / ${children.length} total
 Lineage: ${lineageSummary}${upstreamLine}
 --- END STATUS ---`,
   );
@@ -791,14 +814,14 @@ ${orchestratorStatus}
   }
 
   // Layer 8: Available Tools
-// Tool schemas are already supplied separately to the inference API.
-// Avoid duplicating tool descriptions in the system prompt.
-sections.push(
-  `--- AVAILABLE TOOLS ---
+  // Tool schemas are already supplied separately to the inference API.
+  // Avoid duplicating tool descriptions in the system prompt.
+  sections.push(
+    `--- AVAILABLE TOOLS ---
 You have ${tools.length} tools available through the tool interface.
 Use the provided tool schemas to determine their names, parameters, and capabilities.
---- END TOOLS ---`
-);
+--- END TOOLS ---`,
+  );
 
   // Layer 9: Creator's Initial Message (first run only)
   if (isFirstRun && config.creatorMessage) {
@@ -807,29 +830,32 @@ Use the provided tool schemas to determine their names, parameters, and capabili
     );
   }
 
- if (process.env.DEBUG_PROMPT === "1") {
-  console.log("\n========== SYSTEM PROMPT BREAKDOWN ==========");
+  if (process.env.DEBUG_PROMPT === "1") {
+    console.log("\n========== SYSTEM PROMPT BREAKDOWN ==========");
 
-  sections.forEach((section, index) => {
-    const chars = section.length;
-    const approxTokens = Math.ceil(chars / 4);
+    sections.forEach((section, index) => {
+      const chars = section.length;
+      const approxTokens = Math.ceil(chars / 4);
+
+      console.log(
+        `[PROMPT SECTION ${index + 1}] ${chars} chars (~${approxTokens} tokens) :: ` +
+          section.slice(0, 80).replace(/\n/g, " "),
+      );
+    });
+
+    const totalChars = sections.reduce(
+      (sum, section) => sum + section.length,
+      0,
+    );
 
     console.log(
-      `[PROMPT SECTION ${index + 1}] ${chars} chars (~${approxTokens} tokens) :: ` +
-      section.slice(0, 80).replace(/\n/g, " ")
+      `[PROMPT TOTAL] ${totalChars} chars (~${Math.ceil(totalChars / 4)} tokens)`,
     );
-  });
 
-  const totalChars = sections.reduce((sum, section) => sum + section.length, 0);
+    console.log("=============================================\n");
+  }
 
-  console.log(
-    `[PROMPT TOTAL] ${totalChars} chars (~${Math.ceil(totalChars / 4)} tokens)`
-  );
-
-  console.log("=============================================\n");
-}
-
-return sections.join("\n\n");
+  return sections.join("\n\n");
 }
 
 /**
