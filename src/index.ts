@@ -513,20 +513,30 @@ async function run(): Promise<void> {
 
       if (state === "sleeping") {
         const sleepUntilStr = db.getKV("sleep_until");
+        const sleepReason = db.getKV("sleep_reason");
         const sleepUntil = sleepUntilStr
           ? new Date(sleepUntilStr).getTime()
           : Date.now() + 60_000;
         const sleepMs = Math.max(sleepUntil - Date.now(), 10_000);
+        const budgetCooldown = sleepReason === "budget_exceeded";
+
         logger.info(
-          `[${new Date().toISOString()}] Sleeping for ${Math.round(sleepMs / 1000)}s`,
+          `[${new Date().toISOString()}] Sleeping for ${Math.round(sleepMs / 1000)}s` +
+            (budgetCooldown ? " (budget cooldown)" : ""),
         );
 
-        // Sleep, but check for wake requests periodically
+        // Normal sleep may be interrupted by wake events.
+        // Budget cooldown must not be interrupted because another inference
+        // attempt cannot succeed until the cooldown expires.
         const checkInterval = Math.min(sleepMs, 30_000);
         let slept = 0;
         while (slept < sleepMs) {
           await sleep(checkInterval);
           slept += checkInterval;
+
+          if (budgetCooldown && Date.now() < sleepUntil) {
+            continue;
+          }
 
           // Phase 1.1: Check for wake events from wake_events table (atomic consume)
           const wakeEvent = consumeNextWakeEvent(db.raw);
@@ -539,8 +549,9 @@ async function run(): Promise<void> {
           }
         }
 
-        // Clear sleep state
+        // Clear sleep state after the requested sleep period finishes.
         db.deleteKV("sleep_until");
+        db.deleteKV("sleep_reason");
         continue;
       }
     } catch (err: any) {

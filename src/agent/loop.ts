@@ -714,6 +714,7 @@ if (routerResult.finishReason === "budget_exceeded") {
   }
 
   db.setKV("last_budget_exceeded", new Date().toISOString());
+  db.setKV("sleep_reason", "budget_exceeded");
   db.setKV(
     "sleep_until",
     new Date(Date.now() + 15 * 60_000).toISOString(),
