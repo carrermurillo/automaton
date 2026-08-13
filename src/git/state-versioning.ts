@@ -6,13 +6,22 @@
  * The automaton's entire identity history is version-controlled and replayable.
  */
 
+import os from "node:os";
 import type { ConwayClient, AutomatonDatabase } from "../types.js";
 import { gitInit, gitCommit, gitStatus, gitLog } from "./tools.js";
 
 const AUTOMATON_DIR = "~/.automaton";
 
+function quoteShellArg(arg: string): string {
+  if (process.platform === "win32") {
+    return `"${arg.replace(/"/g, '\\"')}"`;
+  }
+
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
 function resolveHome(p: string): string {
-  const home = process.env.HOME || "/root";
+  const home = os.homedir();
   if (p.startsWith("~")) {
     return `${home}${p.slice(1)}`;
   }
@@ -28,13 +37,14 @@ export async function initStateRepo(
 ): Promise<void> {
   const dir = resolveHome(AUTOMATON_DIR);
 
-  // Check if already initialized
+  // Check if already initialized.
+  // git -C works on both Windows and Unix.
   const checkResult = await conway.exec(
-    `test -d ${dir}/.git && echo "exists" || echo "nope"`,
+    `git -C ${quoteShellArg(dir)} rev-parse --git-dir 2>&1`,
     5000,
   );
 
-  if (checkResult.stdout.trim() === "exists") {
+  if (checkResult.exitCode === 0) {
     return;
   }
 
@@ -57,7 +67,7 @@ logs/
 
   // Configure git user
   await conway.exec(
-    `cd ${dir} && git config user.name "Automaton" && git config user.email "automaton@conway.tech"`,
+    `git -C ${quoteShellArg(dir)} config user.name "Automaton" && git -C ${quoteShellArg(dir)} config user.email "automaton@conway.tech"`,
     5000,
   );
 

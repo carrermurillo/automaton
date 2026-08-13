@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Git Tools
  *
  * Built-in git operations for the automaton.
@@ -217,5 +217,9 @@ export async function gitInit(
 }
 
 function escapeShellArg(arg: string): string {
+  if (process.platform === "win32") {
+    return `"${arg.replace(/"/g, '\\"')}"`;
+  }
+
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
